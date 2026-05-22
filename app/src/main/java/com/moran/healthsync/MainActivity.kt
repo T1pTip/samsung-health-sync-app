@@ -37,6 +37,14 @@ class MainActivity : ComponentActivity() {
     private val daysBack = 7
     // Samsung Health's Health Connect package - filter to it so values match the Samsung app.
     private val samsungPkg = "com.sec.android.app.shealth"
+    // Samsung's Steps screen DERIVES distance & active-calories from step count using fixed
+    // personal coefficients. It does NOT push ActiveCalories to Health Connect, and its
+    // DistanceRecord is partial - so to mirror the Steps screen 1:1 we derive both from steps.
+    // Coefficients verified against two Samsung snapshots:
+    //   distance: 8.83/11571 = 11.98/15711 = 0.000763 km/step (stride ~0.763 m)
+    //   calories: 466/11571  = 633/15711   = 0.0403 kcal/step
+    private val kmPerStep = 0.000763
+    private val kcalPerStep = 0.0403
 
     private val permissions = setOf(
         HealthPermission.getReadPermission(StepsRecord::class),
@@ -137,11 +145,10 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val steps = resp[StepsRecord.COUNT_TOTAL] ?: 0L
-                    val distKm = resp[DistanceRecord.DISTANCE_TOTAL]?.inKilometers ?: 0.0
-                    val activeCal = resp[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories
-                    val totalCal = resp[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories
-                    // "Based on Samsung": active calories match the Samsung Steps screen; total only as fallback.
-                    val calories = (activeCal ?: totalCal ?: 0.0).roundToInt()
+                    // Mirror the Samsung Steps screen exactly: derive distance & calories from steps
+                    // (same as Samsung's own screen logic). Snapshot reflects Samsung at sync moment.
+                    val distKm = steps * kmPerStep
+                    val calories = (steps * kcalPerStep).roundToInt()
                     val distRounded = (distKm * 100).roundToInt() / 100.0
 
                     rows.put(
