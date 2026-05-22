@@ -9,11 +9,14 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.BodyFatRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
+import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.records.metadata.DataOrigin
 import androidx.health.connect.client.request.AggregateRequest
+import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -24,6 +27,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.roundToInt
@@ -34,6 +38,7 @@ class MainActivity : ComponentActivity() {
     private val supabaseUrl = "https://pvufishqhvuhulcmlvqr.supabase.co"
     private val supabaseKey = "sb_publishable_2fjgmZhjjUuTfvp1KC35cg_eFzxE06S"
     private val table = "health_daily"
+    private val metricsTable = "body_metrics"
     private val daysBack = 7
     // Samsung Health's Health Connect package - filter to it so values match the Samsung app.
     private val samsungPkg = "com.sec.android.app.shealth"
@@ -50,7 +55,9 @@ class MainActivity : ComponentActivity() {
         HealthPermission.getReadPermission(StepsRecord::class),
         HealthPermission.getReadPermission(DistanceRecord::class),
         HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
-        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class)
+        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
+        HealthPermission.getReadPermission(WeightRecord::class),
+        HealthPermission.getReadPermission(BodyFatRecord::class)
     )
 
     private lateinit var status: TextView
@@ -163,7 +170,24 @@ class MainActivity : ComponentActivity() {
 
                 setStatus("Uploading to Supabase...")
                 val result = upload(rows)
-                setStatus("Done.\n\n$preview\nServer: $result")
+
+                // Body composition (weight + body fat): latest reading from Health Connect (Samsung BIA).
+                val nowI = Instant.now()
+                val fromI = nowI.minusSeconds(60L * 24 * 3600)
+                val wRec = client.readRecords(
+                    ReadRecordsRequest(recordType = WeightRecord::class, timeRangeFilter = TimeRangeFilter.between(fromI, nowI))
+                ).records.lastOrNull()
+                val bfRec = client.readRecords(
+                    ReadRecordsRequest(recordType = BodyFatRecord::class, timeRangeFilter = TimeRangeFilter.between(fromI, nowI))
+                ).records.lastOrNull()
+                val weightKg = wRec?.weight?.inKilograms
+                val bodyFatPct = bfRec?.percentage?.value
+                val bodyResult = syncBodyMetric(weightKg, bodyFatPct, wRec?.time?.toString())
+                val bodyLine = if (weightKg != null)
+                    "Body: $weightKg kg, ${bodyFatPct ?: "-"}%  ($bodyResult)\n"
+                else "Body: no weight record found\n"
+
+                setStatus("Done.\n\n$preview$bodyLine\nServer: $result")
             } catch (e: Exception) {
                 setStatus("Error: ${e.message}")
             }
@@ -182,6 +206,47 @@ class MainActivity : ComponentActivity() {
             .build()
         http.newCall(request).execute().use { r ->
             if (r.isSuccessful) "OK (${r.code})" else "FAILED (${r.code}) ${r.body?.string()?.take(200)}"
+        }
+    }
+
+    // Body metrics dedup-by-day: skip if today's reading is already stored as 'samsung' (no dup rows per launch).
+    private suspend fun syncBodyMetric(weightKg: Double?, bodyFatPct: Double?, measuredAtIso: String?): String = withContext(Dispatchers.IO) {
+        if (weightKg == null || measuredAtIso == null) return@withContext "skip(no data)"
+        try {
+            val checkUrl = "$supabaseUrl/rest/v1/$metricsTable?select=measured_at&source=eq.samsung&order=measured_at.desc&limit=1"
+            val checkReq = Request.Builder().url(checkUrl)
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .get().build()
+            val lastDay: String? = http.newCall(checkReq).execute().use { r ->
+                if (!r.isSuccessful) null
+                else {
+                    val arr = JSONArray(r.body?.string() ?: "[]")
+                    if (arr.length() > 0) arr.getJSONObject(0).optString("measured_at", "").take(10) else ""
+                }
+            }
+            if (lastDay != null && lastDay == measuredAtIso.take(10)) return@withContext "already synced"
+
+            val obj = JSONObject()
+                .put("measured_at", measuredAtIso)
+                .put("weight", weightKg)
+                .put("source", "samsung")
+            if (bodyFatPct != null) obj.put("body_fat_pct", bodyFatPct)
+            val reqBody = JSONArray().put(obj).toString()
+                .toRequestBody("application/json; charset=utf-8".toMediaType())
+            val postReq = Request.Builder()
+                .url("$supabaseUrl/rest/v1/$metricsTable")
+                .addHeader("apikey", supabaseKey)
+                .addHeader("Authorization", "Bearer $supabaseKey")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=minimal")
+                .post(reqBody)
+                .build()
+            http.newCall(postReq).execute().use { r ->
+                if (r.isSuccessful) "saved (${r.code})" else "FAILED (${r.code})"
+            }
+        } catch (e: Exception) {
+            "error: ${e.message}"
         }
     }
 
