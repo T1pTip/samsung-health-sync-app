@@ -60,6 +60,9 @@ class MainActivity : ComponentActivity() {
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.statusText)
         findViewById<Button>(R.id.syncButton).setOnClickListener { onSyncClicked() }
+        if (savedInstanceState == null) {
+            onSyncClicked()
+        }
     }
 
     private fun onSyncClicked() {
@@ -161,4 +164,5 @@ class MainActivity : ComponentActivity() {
         runOnUiThread { status.text = text }
     }
 }
+
 
