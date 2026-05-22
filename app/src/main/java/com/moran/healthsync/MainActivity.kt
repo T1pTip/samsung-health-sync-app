@@ -1,4 +1,4 @@
-package com.moran.healthsync
+﻿package com.moran.healthsync
 
 import android.os.Bundle
 import android.widget.Button
@@ -110,7 +110,7 @@ class MainActivity : ComponentActivity() {
                                 StepsRecord.COUNT_TOTAL,
                                 DistanceRecord.DISTANCE_TOTAL,
                                 TotalCaloriesBurnedRecord.ENERGY_TOTAL,
-                                ActiveCaloriesBurnedRecord.ENERGY_TOTAL
+                                ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL
                             ),
                             timeRangeFilter = TimeRangeFilter.between(start, end)
                         )
@@ -119,7 +119,7 @@ class MainActivity : ComponentActivity() {
                     val steps = resp[StepsRecord.COUNT_TOTAL] ?: 0L
                     val distKm = resp[DistanceRecord.DISTANCE_TOTAL]?.inKilometers ?: 0.0
                     val totalCal = resp[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories
-                    val activeCal = resp[ActiveCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories
+                    val activeCal = resp[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories
                     val calories = (totalCal ?: activeCal ?: 0.0).roundToInt()
                     val distRounded = (distKm * 100).roundToInt() / 100.0
 
@@ -161,3 +161,4 @@ class MainActivity : ComponentActivity() {
         runOnUiThread { status.text = text }
     }
 }
+
