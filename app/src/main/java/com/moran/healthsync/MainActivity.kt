@@ -12,6 +12,7 @@ import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
+import androidx.health.connect.client.records.metadata.DataOrigin
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +35,8 @@ class MainActivity : ComponentActivity() {
     private val supabaseKey = "sb_publishable_2fjgmZhjjUuTfvp1KC35cg_eFzxE06S"
     private val table = "health_daily"
     private val daysBack = 7
+    // Samsung Health's Health Connect package - filter to it so values match the Samsung app.
+    private val samsungPkg = "com.sec.android.app.shealth"
 
     private val permissions = setOf(
         HealthPermission.getReadPermission(StepsRecord::class),
@@ -107,23 +110,38 @@ class MainActivity : ComponentActivity() {
                     val start = date.atStartOfDay()
                     val end = date.plusDays(1).atStartOfDay()
 
-                    val resp = client.aggregate(
+                    val metricSet = setOf(
+                        StepsRecord.COUNT_TOTAL,
+                        DistanceRecord.DISTANCE_TOTAL,
+                        TotalCaloriesBurnedRecord.ENERGY_TOTAL,
+                        ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL
+                    )
+                    // Filter to Samsung Health only so totals match the Samsung app (no multi-source over-count).
+                    var resp = client.aggregate(
                         AggregateRequest(
-                            metrics = setOf(
-                                StepsRecord.COUNT_TOTAL,
-                                DistanceRecord.DISTANCE_TOTAL,
-                                TotalCaloriesBurnedRecord.ENERGY_TOTAL,
-                                ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL
-                            ),
-                            timeRangeFilter = TimeRangeFilter.between(start, end)
+                            metrics = metricSet,
+                            timeRangeFilter = TimeRangeFilter.between(start, end),
+                            dataOriginFilter = setOf(DataOrigin(samsungPkg))
                         )
                     )
+                    // Fallback: if Samsung wrote nothing for this day, read all sources instead.
+                    val sHasData = (resp[StepsRecord.COUNT_TOTAL] ?: 0L) > 0L ||
+                        (resp[DistanceRecord.DISTANCE_TOTAL]?.inKilometers ?: 0.0) > 0.0
+                    if (!sHasData) {
+                        resp = client.aggregate(
+                            AggregateRequest(
+                                metrics = metricSet,
+                                timeRangeFilter = TimeRangeFilter.between(start, end)
+                            )
+                        )
+                    }
 
                     val steps = resp[StepsRecord.COUNT_TOTAL] ?: 0L
                     val distKm = resp[DistanceRecord.DISTANCE_TOTAL]?.inKilometers ?: 0.0
-                    val totalCal = resp[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories
                     val activeCal = resp[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories
-                    val calories = (totalCal ?: activeCal ?: 0.0).roundToInt()
+                    val totalCal = resp[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories
+                    // "Based on Samsung": active calories match the Samsung Steps screen; total only as fallback.
+                    val calories = (activeCal ?: totalCal ?: 0.0).roundToInt()
                     val distRounded = (distKm * 100).roundToInt() / 100.0
 
                     rows.put(
